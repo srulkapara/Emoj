@@ -3,10 +3,8 @@ from django.http import HttpResponse
 from clubbing.models import *
 
 import random, datetime, string, json
-# Create your views here.
 
-
-COOKIE_NAME = "UserID"
+COOKIE_NAME = "EmojUserID"
 
 def push_some_initial_values():
     RIDDLE2TITLE = {":)" : 'happy', ":(": 'sad'}
@@ -22,39 +20,38 @@ def push_some_initial_values():
         if Riddle.objects.filter(unicode_chars=the_riddle).count() == 0:
             title_obj = Title.objects.filter(text=RIDDLE2TITLE[the_riddle]).get()
             first_user = User.objects.all()[0]
-            Riddle(phraser=first_user, title=title_obj, unicode_chars=the_riddle, seconds_spent=10).save()
+            Riddle(riddler=first_user, title=title_obj, unicode_chars=the_riddle, seconds_spent=10).save()
 
 
 def get_random_cookie():
     pool = string.digits + string.ascii_letters
     return ''.join(random.choice(pool) for _x in range(20))
 
-def log_user(request):
+def get_user(request):
     existing_cookie = request.COOKIES.get(COOKIE_NAME)
     now = datetime.datetime.now()
     if existing_cookie and User.objects.filter(cookie_id=existing_cookie).exists():
         rec = User.objects.filter(cookie_id=existing_cookie).get()
-        print('Found %s (%s attempts)!'%(existing_cookie, rec.page_count))
         rec.last_seen = now
         rec.page_count += 1
         rec.save()
-        return existing_cookie
+        return rec
     else:
         new_cookie = get_random_cookie()
         campaign_id, campaign_source, referrer = '', '', None # TODO
-        User(
+        new_user = User(
             cookie_id=new_cookie, first_seen=now, last_seen=now,
             campaign_id=campaign_id, campaign_source=campaign_source, referrer=referrer
-        ).save()
-        return new_cookie
+        )
+        new_user.save()
+        return new_user
 
-def wrap_with_cookie(resp, cookie):
-    resp.set_cookie(COOKIE_NAME, cookie)
+def wrap_with_cookie(resp, user_obj):
+    resp.set_cookie(COOKIE_NAME, user_obj.cookie_id)
     return resp
 
 def find_hint(shown_riddle_id):
     shown_riddle = ShownRiddle.objects.get(id=shown_riddle_id)
-    log_user(shown_riddle.solver) # no change for cookie
     riddle = shown_riddle.riddle_shown
     now = datetime.datetime.now()
     hints_in_order = [{'category': riddle.title.category}] + [
@@ -81,14 +78,82 @@ def find_hint(shown_riddle_id):
         return {next_k: next_v}
 
 
-def get_hint(request):
-    hint = find_hint(request.shown_riddle_id)
-    return HttpResponse(hint)
+def text_match(s1, s2):
+    return s1 and s2 and s1.lower() == s2.lower()
 
-def get_initial_page(request):
+##############################
+# actual ajax/views functions
+##############################
+
+
+def load_hint(request):
+    hint = find_hint(request.srid)
+    return wrap_with_cookie(HttpResponse(hint), get_user(request))
+
+def load_specific_riddle(request, uuid):
     # This a dev-env hack, just to put some stuff in DB so we can query (usually on empty DB)
     push_some_initial_values()
-    guess_me = random.choice([x.unicode_chars for x in Riddle.objects.all()])
-    return wrap_with_cookie(HttpResponse(guess_me), log_user(request))
+    now = datetime.datetime.now()
+    the_riddle = Riddle.loadFromUUID(uuid)
+    solver = get_user(request)
+    shown = ShownRiddle(
+        solver=solver, riddle_shown=the_riddle, time_shown=now, hints_used=''
+    )
+    shown.save()
+    return wrap_with_cookie(
+        HttpResponse(json.dumps({"riddle": the_riddle.unicode_chars, "srid": shown.id})),
+        get_user(request)
+    )
 
+def load_some_riddle(request):
+    # This a dev-env hack, just to put some stuff in DB so we can query (usually on empty DB)
+    push_some_initial_values()
+    uuid = random.choice(Riddle.objects.all()).getUUID()
+    return load_specific_riddle(request, uuid)
 
+def load_some_title(request):
+    # This a dev-env hack, just to put some stuff in DB so we can query (usually on empty DB)
+    push_some_initial_values()
+    now = datetime.datetime.now()
+    riddler = get_user(request)
+    title = random.choice(Title.objects.all())
+    shown=ShownTitle(
+        riddler=riddler, title_shown=title, time_shown=now
+    )
+    shown.save()
+    return {"stid": shown.id, "title": title.text, "category": title.category}
+
+def submit_riddle(request, stid, chosen_chars, more_chars_considered=None):
+    # This a dev-env hack, just to put some stuff in DB so we can query (usually on empty DB)
+    push_some_initial_values()
+    now = datetime.datetime.now()
+    shown_title = ShownTitle.objects.get(id=stid)
+    riddler = get_user(request)
+    rid = Riddle(
+        riddler=riddler,
+        title=shown_title.title_shown,
+        seconds_spent=(now-shown_title.time_shown).total_seconds(),
+        unicode_chars=chosen_chars,
+        more_chars_considered=more_chars_considered,
+    )
+    rid.save()
+    return {"link": rid.getUUID()}
+
+def submit_solution(request, srid, guess):
+    # This a dev-env hack, just to put some stuff in DB so we can query (usually on empty DB)
+    push_some_initial_values()
+    now = datetime.datetime.now()
+    shown_riddle = ShownRiddle.objects.get(id=srid)
+    if text_match(shown_riddle.riddle_shown.title.text == guess):
+        # Create a shareable-link for a friend, with a new fake-riddle
+        riddle_copy = Riddle(
+            riddler=shown_riddle.solver,
+            title=shown_riddle.riddle_shown.title.text,
+            seconds_spent=(now-shown_riddle.time_shown).total_seconds(),
+            unicode_chars=shown_riddle.riddle.unicode_chars,
+            reshared=shown_riddle.riddle_shown
+        )
+        riddle_copy.save()
+        return {"success": 1, "share_link": riddle_copy.getUUID()}
+    else:
+        return {"success": 0}
