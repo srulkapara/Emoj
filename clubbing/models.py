@@ -6,10 +6,11 @@ class User(models.Model):
     auth_identifier = models.CharField(max_length=200)
     auth_type= models.CharField(max_length=20)
     first_seen = models.DateTimeField('first time seen')
-    laste_seen = models.DateTimeField('last time seen')
+    last_seen = models.DateTimeField('last time seen')
+    page_count = models.IntegerField(default=0)
     campaign_id = models.CharField(max_length=200)
     campaign_source = models.CharField(max_length=20)
-    referrer = models.ForeignKey('self', on_delete=models.CASCADE)
+    referrer = models.ForeignKey('self', on_delete=models.CASCADE, null=True)
 
 
 class Title(models.Model):
@@ -26,21 +27,21 @@ class Riddle(models.Model):
     # TODO: Decide how to store unicode (json of ints?)
     unicode_chars = models.TextField()
     more_chars_considered = models.TextField()
-    reshared = models.ForeignKey('self', on_delete=models.CASCADE)
+    reshared = models.ForeignKey('self', on_delete=models.CASCADE, null=True)
 
 class ShownRiddle(models.Model):
     solver = models.ForeignKey(User, on_delete=models.CASCADE)
-    riddle_shown = models.ForeignKey(Title, on_delete=models.CASCADE)
+    riddle_shown = models.ForeignKey(Riddle, on_delete=models.CASCADE)
     time_shown = models.DateTimeField('time shown')
     hints_used = models.TextField() # json of details?
 
 
 class Solve(models.Model):
-    show = models.ForeignKey(ShownRiddle, on_delete=models.CASCADE)
+    riddle_show = models.ForeignKey(ShownRiddle, on_delete=models.CASCADE)
     time_spent = models.IntegerField() # seconds
     solve_time = models.DateTimeField('time solved')
-    attempts_count = models.IntegerField()
-    difficult_feedback = models.IntegerField()
+    attempts_count = models.IntegerField(default=0)
+    difficult_feedback = models.IntegerField(null=True)
 
 
 class Emoji(models.Model):
